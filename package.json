@@ -1,0 +1,11 @@
+{
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:scraping": "playwright test scraping/scraping.spec.js --headed --workers=1",
+    "test:debug": "playwright test scraping/scraping.spec.js --debug --workers=1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1"
+  }
+}
