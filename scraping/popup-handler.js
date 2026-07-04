@@ -72,8 +72,8 @@ async function dismissEmailCapture(page) {
 
 export async function waitUntilReady(page) {
   const loading = page.locator('#loading-symbol');
-  if ((await loading.count()) > 0) {
-    await loading.waitFor({ state: 'hidden', timeout: 60000 }).catch(() => {});
+  if (await loading.isVisible().catch(() => false)) {
+    await loading.waitFor({ state: 'hidden', timeout: 15000 }).catch(() => {});
   }
   await page.waitForLoadState('domcontentloaded').catch(() => {});
 }

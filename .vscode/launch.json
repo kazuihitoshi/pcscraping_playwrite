@@ -1,0 +1,69 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Playwright: ヘッドレス実行",
+      "type": "node",
+      "request": "launch",
+      "preLaunchTask": "Verify WSL drive (U:)",
+      "program": "U:/home/disk/pcscraping_playwrite/node_modules/@playwright/test/cli.js",
+      "args": [
+        "test",
+        "scraping/scraping.spec.js",
+        "--workers=1",
+        "--config",
+        "U:/home/disk/pcscraping_playwrite/playwright.headless.config.js"
+      ],
+      "cwd": "U:/home/disk/pcscraping_playwrite",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Playwright: ブレークポイントでステップ実行",
+      "type": "node",
+      "request": "launch",
+      "preLaunchTask": "Verify WSL drive (U:)",
+      "program": "U:/home/disk/pcscraping_playwrite/node_modules/@playwright/test/cli.js",
+      "args": [
+        "test",
+        "scraping/scraping.spec.js",
+        "--headed",
+        "--workers=1",
+        "--config",
+        "U:/home/disk/pcscraping_playwrite/playwright.config.js"
+      ],
+      "cwd": "U:/home/disk/pcscraping_playwrite",
+      "console": "integratedTerminal",
+      "autoAttachChildProcesses": true,
+      "skipFiles": [
+        "<node_internals>/**",
+        "**/node_modules/playwright/**",
+        "**/node_modules/playwright-core/**"
+      ],
+      "env": {
+        "PW_TEST_SOURCE_TRANSFORM": "U:/home/disk/pcscraping_playwrite/scripts/debug-transform.cjs",
+        "PW_TEST_SOURCE_TRANSFORM_SCOPE": "U:/home/disk/pcscraping_playwrite/scraping"
+      },
+      "resolveSourceMapLocations": [
+        "U:/home/disk/pcscraping_playwrite/**",
+        "${workspaceFolder}/**"
+      ]
+    },
+    {
+      "name": "Playwright: Inspectorでステップ実行",
+      "type": "node",
+      "request": "launch",
+      "preLaunchTask": "Verify WSL drive (U:)",
+      "program": "U:/home/disk/pcscraping_playwrite/node_modules/@playwright/test/cli.js",
+      "args": [
+        "test",
+        "scraping/scraping.spec.js",
+        "--debug",
+        "--workers=1",
+        "--config",
+        "U:/home/disk/pcscraping_playwrite/playwright.config.js"
+      ],
+      "cwd": "U:/home/disk/pcscraping_playwrite",
+      "console": "integratedTerminal"
+    }
+  ]
+}

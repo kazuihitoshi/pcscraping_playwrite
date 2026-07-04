@@ -1,0 +1,9 @@
+node_modules
+pclist.db
+pclist.db.tmp
+.git
+.vscode
+scripts
+assets
+**/test-results
+**/playwright-report

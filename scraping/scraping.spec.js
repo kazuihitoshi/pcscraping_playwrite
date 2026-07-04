@@ -114,22 +114,24 @@ export async function checkSearchTexts(scope, itemSelector, priceSelector, searc
   if (priceSelector === undefined) priceSelector = '.ux-cell-delta-price';
   if (searchTexts === undefined) searchTexts = osSearchTexts;
 
-  const needles = searchTexts.map((t) => t.toLowerCase());
-  const items = scope.locator(itemSelector);
-  const count = await items.count();
-
-  for (let i = 0; i < count; i++) {
-    const item = items.nth(i);
-    const text = ((await item.textContent()) ?? '').trim();
-    const lower = text.toLowerCase();
-    if (!needles.some((n) => lower.includes(n))) continue;
-
-    const container = item.locator('xpath=..');
-    const price = ((await container.locator(priceSelector).first().textContent()) ?? '').trim();
-    return { linuxtext: text, linuxprice: price };
-  }
-
-  return { linuxtext: null, linuxprice: null };
+  return scope.evaluate(
+    ({ itemSelector, priceSelector, searchTexts }) => {
+      const needles = searchTexts.map((t) => t.toLowerCase());
+      for (const itemEl of document.querySelectorAll(itemSelector)) {
+        const text = (itemEl.textContent ?? '').trim();
+        const lower = text.toLowerCase();
+        if (!needles.some((n) => lower.includes(n))) continue;
+        const container = itemEl.parentElement ?? itemEl;
+        const priceEl = container.querySelector(priceSelector);
+        return {
+          linuxtext: text,
+          linuxprice: (priceEl?.textContent ?? '').trim(),
+        };
+      }
+      return { linuxtext: null, linuxprice: null };
+    },
+    { itemSelector, priceSelector, searchTexts }
+  );
 }
 
 function saveProduct(db, url, productInfo, linux) {
@@ -144,15 +146,98 @@ function saveProduct(db, url, productInfo, linux) {
   });
 }
 
-async function clickLink(page, locator) {
-  await locator.scrollIntoViewIfNeeded();
+function resolveHref(page, href) {
+  if (!href) return null;
+  if (href.startsWith('http')) return href;
+  if (href.startsWith('//')) return `https:${href}`;
+  return new URL(href, page.url()).href;
+}
+
+/** 一覧の商品カードのみ取得（おすすめ製品カルーセル内の article を除外） */
+function getProductArticles(page) {
+  return page.locator('#sr-product-stacks article').filter({
+    has: page.locator('a.variant-customize-button, a:has-text("オプションを見る")'),
+  });
+}
+
+/** 商品詳細へ進むリンク（旧 UI / 新 UI 両対応） */
+function getProductDetailLink(article) {
+  return article.locator('a.variant-customize-button, a:has-text("オプションを見る")').first();
+}
+
+function getListPagination(page) {
+  return page.locator('#scr-pagination-content, #sr-dds-pagination').first();
+}
+
+async function getNextPageButton(page) {
+  return getListPagination(page).locator(
+    'button[aria-label="Next page"], button.dds__pagination__next-page',
+  ).first();
+}
+
+async function hasListPageChanged(page, { urlBefore, pageBefore, articleTextBefore }) {
+  if (!urlsMatch(page.url(), urlBefore)) return true;
+
+  const pageInput = getListPagination(page).locator('input[aria-label="ページ"]');
+  if (pageBefore && (await pageInput.count()) > 0) {
+    const pageAfter = await pageInput.inputValue();
+    if (pageAfter !== pageBefore) return true;
+  }
+
+  const articleTextAfter = await page.locator('#sr-product-stacks article').first().textContent().catch(() => null);
+  if (articleTextBefore && articleTextAfter && articleTextBefore !== articleTextAfter) return true;
+
+  return false;
+}
+
+async function goNextListPage(page) {
+  if (page.isClosed()) return false;
+
+  const nextpage = await getNextPageButton(page);
+  if (await nextpage.count() === 0) {
+    console.log('次へボタンなし。一覧走査を終了します。');
+    return false;
+  }
+
+  await nextpage.scrollIntoViewIfNeeded();
+
+  const ariaDisabled = await nextpage.getAttribute('aria-disabled');
+  if (await nextpage.isDisabled() || ariaDisabled === 'true') {
+    console.log('最終ページです。一覧走査を終了します。');
+    return false;
+  }
+
+  const pageInput = getListPagination(page).locator('input[aria-label="ページ"]');
+  const pageBefore = (await pageInput.count()) > 0 ? await pageInput.inputValue() : null;
+  const urlBefore = page.url();
+  const articleTextBefore = await page.locator('#sr-product-stacks article').first().textContent().catch(() => null);
+
+  await handleInitialPopups(page);
   await waitUntilReady(page);
+  await nextpage.click({ force: true });
+  await waitUntilReady(page);
+
+  for (let attempt = 0; attempt < 20; attempt++) {
+    if (await hasListPageChanged(page, { urlBefore, pageBefore, articleTextBefore })) {
+      return true;
+    }
+    await sleep(500);
+  }
+
+  console.log('次ページへ進めなかったため一覧走査を終了します。');
+  return false;
+}
+
+async function clickLink(page, locator, hrefOverride) {
+  await waitUntilReady(page);
+  const href = hrefOverride ?? await locator.getAttribute('href').catch(() => null);
+
   try {
+    await locator.scrollIntoViewIfNeeded({ timeout: 10000 });
     await locator.click({ force: true, timeout: 15000 });
   } catch (e) {
-    const href = await locator.getAttribute('href');
-    if (!href) throw e;
-    const url = href.startsWith('http') ? href : new URL(href, page.url()).href;
+    const url = resolveHref(page, href);
+    if (!url) throw e;
     await page.goto(url, { waitUntil: 'domcontentloaded' });
   }
   await waitUntilReady(page);
@@ -172,11 +257,11 @@ test('Dellのページネーションテスト', async ({ page }) => {
   // 3. 本来のスクレイピング処理（次へボタンを連打）
   console.log('本来のスクレイピング処理を開始します。');
   async function getItems(page){
-    const items = await page.locator('#sr-product-stacks article');
+    const items = getProductArticles(page);
     try {
-      await items.first().waitFor({ state: 'visible', timeout: 40000 });
-      // 2. 画面に表示された状態で個数を数える
+      await items.first().waitFor({ state: 'visible', timeout: 30000 });
       const count = await items.count();
+      console.log(`商品 ${count} 件を検出しました (${page.url()})`);
       return { items, count };
     } catch (e) {
       console.log('商品が見つからない、または読み込みがタイムアウトしました。');
@@ -192,12 +277,12 @@ test('Dellのページネーションテスト', async ({ page }) => {
     var currenturl = page.url();
     
     for (let i = 0; i < count; i++) {  
-      const item = items.nth(i);
-      const custompage = item.locator('a.variant-customize-button');
+      const custompage = getProductDetailLink(items.nth(i));
       // 商品別ページ情報の取得
-      if (await custompage.count()>0){
+      if (await custompage.count() > 0) {
+        const customHref = await custompage.getAttribute('href').catch(() => null);
         await handleInitialPopups(page);
-        await clickLink(page, custompage);
+        await clickLink(page, custompage, customHref);
         await handleInitialPopups(page);
         // 詳細を取得する
         // 基本構成がある場合
@@ -267,22 +352,7 @@ test('Dellのページネーションテスト', async ({ page }) => {
       }
     }
 
-    // ページング遷移
-    await handleInitialPopups(page);
-    const nextpage = page.locator('#sr-dds-pagination button.dds__pagination__next-page');
-    if (await nextpage.count() === 0) {
-      console.log('次へボタンなし。一覧走査を終了します。');
-      break;
-    }
-    if (await nextpage.getAttribute('aria-disabled') === 'true') {
-      console.log('最終ページです。一覧走査を終了します。');
-      break;
-    }
-    await handleInitialPopups(page);
-    await waitUntilReady(page);
-    await nextpage.scrollIntoViewIfNeeded();
-    await nextpage.click({ force: true });
-    await waitUntilReady(page);
+    if (!(await goNextListPage(page))) break;
   }
     db.finalize();
   } catch (e) {

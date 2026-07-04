@@ -1,0 +1,25 @@
+services:
+  scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pcscraping-playwrite
+    shm_size: 2gb
+    init: true
+    volumes:
+      # 収集結果の pclist.db をホスト側に残す
+      - .:/app
+      # ホストの node_modules でコンテナ内の依存関係を上書きしない
+      - node_modules:/app/node_modules
+    working_dir: /app
+    command:
+      - npx
+      - playwright
+      - test
+      - scraping/scraping.spec.js
+      - --workers=1
+      - --config
+      - playwright.headless.config.js
+
+volumes:
+  node_modules:
