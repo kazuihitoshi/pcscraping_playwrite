@@ -71,9 +71,10 @@ async function dismissEmailCapture(page) {
 }
 
 export async function waitUntilReady(page) {
+  if (page.isClosed()) return;
   const loading = page.locator('#loading-symbol');
   if (await loading.isVisible().catch(() => false)) {
-    await loading.waitFor({ state: 'hidden', timeout: 15000 }).catch(() => {});
+    await loading.waitFor({ state: 'hidden', timeout: 30_000 }).catch(() => {});
   }
   await page.waitForLoadState('domcontentloaded').catch(() => {});
 }
@@ -103,26 +104,29 @@ async function clickCloseButton(page, selectors) {
 }
 
 export async function handleInitialPopups(page) {
+  if (page.isClosed()) return;
   if (handleInitialPopupsRunning) return;
   handleInitialPopupsRunning = true;
 
   try {
-    console.log('ポップアップのチェックを開始します...');
-
     // 1. クッキー同意ボタン（すべて同意）
     try {
       const cookieBtn = page.locator('#onetrust-accept-btn-handler');
       if (await cookieBtn.count() > 0) {
-        await cookieBtn.click({ force: true });
+        await cookieBtn.click({ force: true, timeout: 5000 });
         console.log('✓ クッキー同意ボタンをクリックしました。');
         await sleep(1500);
       }
     } catch (e) {
-      console.log('クッキー同意失敗:', e.message);
+      if (!page.isClosed()) console.log('クッキー同意失敗:', e.message);
     }
+
+    if (page.isClosed()) return;
 
     // 2. 「今すぐ登録」のメールキャプチャを閉じる
     await dismissEmailCapture(page);
+
+    if (page.isClosed()) return;
 
     // 3. アンケート「実行しない」
     try {
@@ -130,11 +134,11 @@ export async function handleInitialPopups(page) {
         hasText: '実行しない',
       });
       if (await skipSurveyBtn.count() > 0) {
-        await skipSurveyBtn.click({ force: true });
+        await skipSurveyBtn.click({ force: true, timeout: 5000 });
         console.log('✓ アンケートを「実行しない」で閉じました。');
       }
     } catch (e) {
-      console.log('アンケート close 失敗:', e.message);
+      if (!page.isClosed()) console.log('アンケート close 失敗:', e.message);
     }
   } finally {
     handleInitialPopupsRunning = false;

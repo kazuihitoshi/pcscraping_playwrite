@@ -1,6 +1,7 @@
-// ファイル名: dell-test.spec.js
-const targeturl = 'https://www.dell.com/ja-jp/shop/scc/scr/laptops';
-const osSearchTexts = ['linux', 'ubuntu','オペレーティングシステムなし'];
+// ファイル名: scraping.spec.js
+const NOTEBOOK_URL = 'https://www.dell.com/ja-jp/shop/scc/scr/laptops';
+const DESKTOP_URL = 'https://www.dell.com/ja-jp/shop/scc/scr/desktops';
+const osSearchTexts = ['linux', 'ubuntu', 'オペレーティングシステムなし'];
 
 import { test, expect } from '@playwright/test';
 import { handleInitialPopups, waitUntilReady } from './popup-handler.js';
@@ -41,37 +42,49 @@ async function extractNoteText(noteLoc) {
 }
 
 export async function getProductInfo (scope, nameSelector, modelSelector, priceSelector, noteSelector, imgSelector){
+  if (scope.isClosed?.()) return emptyProductInfo();
   if (nameSelector === undefined) nameSelector = 'h1 .page-title';
   if (modelSelector === undefined) modelSelector = 'div.model-id';
   if (priceSelector === undefined) priceSelector = '.sale-price';
   if (noteSelector === undefined) noteSelector = '.card-specs .list-unstyled';
   if (imgSelector === undefined) imgSelector = "img[data-testid='sharedPolarisHeroPdImage']";
+  const elementTimeout = 15_000;
   var name = null, model = null, price = null, img = null;
   const imgLoc = scope.locator(imgSelector).first();
   const nameLoc = scope.locator(nameSelector).first();
   if (await nameLoc.count() > 0) {
-    await nameLoc.waitFor({ state: 'visible', timeout: 40000 });
-    name = await nameLoc.textContent();
+    await nameLoc.waitFor({ state: 'visible', timeout: elementTimeout }).catch(() => {});
+    if (await nameLoc.isVisible().catch(() => false)) {
+      name = await nameLoc.textContent();
+    }
   }
   const modelLoc = scope.locator(modelSelector).first();
   if (await modelLoc.count() > 0) {
-    await modelLoc.waitFor({ state: 'visible', timeout: 40000 });
-    model = await modelLoc.textContent();
+    await modelLoc.waitFor({ state: 'visible', timeout: elementTimeout }).catch(() => {});
+    if (await modelLoc.isVisible().catch(() => false)) {
+      model = await modelLoc.textContent();
+    }
   }
   var priceLoc = scope.locator(priceSelector).first();
   if (await priceLoc.count() > 0) {
-    await priceLoc.waitFor({ state: 'visible', timeout: 40000 });
-    price = await priceLoc.textContent();
+    await priceLoc.waitFor({ state: 'visible', timeout: elementTimeout }).catch(() => {});
+    if (await priceLoc.isVisible().catch(() => false)) {
+      price = await priceLoc.textContent();
+    }
   }
   const noteLoc = scope.locator(noteSelector).first();
   let note = null;
   if (await noteLoc.count() > 0) {
-    await noteLoc.waitFor({ state: 'visible', timeout: 40000 });
-    note = await extractNoteText(noteLoc);
+    await noteLoc.waitFor({ state: 'visible', timeout: elementTimeout }).catch(() => {});
+    if (await noteLoc.isVisible().catch(() => false)) {
+      note = await extractNoteText(noteLoc);
+    }
   }
   if (await imgLoc.count() > 0) {
-    await imgLoc.waitFor({ state: 'visible', timeout: 40000 });
-    img = await imgLoc.getAttribute('src');
+    await imgLoc.waitFor({ state: 'visible', timeout: elementTimeout }).catch(() => {});
+    if (await imgLoc.isVisible().catch(() => false)) {
+      img = await imgLoc.getAttribute('src');
+    }
   }
   if(price)price = price.replace(/,|円/g, '');
   return { name, model, note, price, img };
@@ -86,11 +99,67 @@ function urlsMatch(a, b) {
   }
 }
 
+function normalizePageUrl(url) {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    u.hash = '';
+    return u.href;
+  } catch {
+    return url;
+  }
+}
+
+function emptyProductInfo() {
+  return { name: null, model: null, note: null, price: null, img: null };
+}
+
+function isListPageUrl(url) {
+  try {
+    return /\/shop\/scc\/scr\//.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
+
+function isProductDetailUrl(url) {
+  if (!url || isListPageUrl(url)) return false;
+  try {
+    return /\/spd\//.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
+
+function hasProductData(productInfo) {
+  if (!productInfo) return false;
+  const name = (productInfo.name ?? '').trim();
+  const price = (productInfo.price ?? '').trim();
+  const note = (productInfo.note ?? '').trim();
+  return Boolean(name || price || note);
+}
+
+function saveCollectedData(db, reason) {
+  try {
+    const n = db.count();
+    if (n > 0) {
+      console.log(`${reason} — 収集済み ${n} 件を保存します`);
+      db.finalize();
+    } else {
+      db.discard();
+    }
+  } catch (e) {
+    console.log('DB 保存失敗:', e.message);
+    db.discard();
+  }
+}
+
 export async function goBack(page, url) {
   if (url && urlsMatch(page.url(), url)) return;
 
   try {
-    await page.goBack({ waitUntil: 'domcontentloaded', timeout: 15000 });
+    await page.goBack({ waitUntil: 'domcontentloaded', timeout: 20_000 });
+    await waitUntilReady(page);
   } catch (e) {
     console.log('戻る失敗:', e.message);
   }
@@ -99,13 +168,18 @@ export async function goBack(page, url) {
   if (urlsMatch(page.url(), url)) return;
 
   try {
-    await page.goto(url, { waitUntil: 'domcontentloaded' });
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    await waitUntilReady(page);
   } catch (e) {
     if (urlsMatch(page.url(), url) || e.message?.includes('interrupted')) {
-      await page.waitForLoadState('domcontentloaded').catch(() => {});
+      await waitUntilReady(page);
       return;
     }
     console.log('goto失敗:', e.message);
+  }
+
+  if (!urlsMatch(page.url(), url)) {
+    console.log('戻る後も URL が一致しません:', page.url(), '期待:', url);
   }
 }
 
@@ -123,9 +197,10 @@ export async function checkSearchTexts(scope, itemSelector, priceSelector, searc
         if (!needles.some((n) => lower.includes(n))) continue;
         const container = itemEl.parentElement ?? itemEl;
         const priceEl = container.querySelector(priceSelector);
+        const rawPrice = (priceEl?.textContent ?? '').trim();
         return {
           linuxtext: text,
-          linuxprice: (priceEl?.textContent ?? '').trim(),
+          linuxprice: rawPrice.replace(/[^\d-]/g, ''),
         };
       }
       return { linuxtext: null, linuxprice: null };
@@ -135,8 +210,17 @@ export async function checkSearchTexts(scope, itemSelector, priceSelector, searc
 }
 
 function saveProduct(db, url, productInfo, linux) {
-  db.insert({
+  if (isListPageUrl(url)) {
+    console.log('一覧ページのため保存スキップ:', url);
+    return false;
+  }
+  if (!hasProductData(productInfo)) {
+    console.log('商品情報なしのため保存スキップ:', url);
+    return false;
+  }
+  return db.insert({
     url,
+    imgurl: productInfo?.img ?? null,
     name: productInfo?.name ?? null,
     model: productInfo?.model ?? null,
     note: productInfo?.note ?? null,
@@ -217,11 +301,12 @@ async function goNextListPage(page) {
   await nextpage.click({ force: true });
   await waitUntilReady(page);
 
-  for (let attempt = 0; attempt < 20; attempt++) {
+  for (let attempt = 0; attempt < 200; attempt++) {
     if (await hasListPageChanged(page, { urlBefore, pageBefore, articleTextBefore })) {
       return true;
     }
-    await sleep(500);
+    console.log('次ページリトライします...');
+    await sleep(5000);
   }
 
   console.log('次ページへ進めなかったため一覧走査を終了します。');
@@ -236,27 +321,184 @@ async function clickLink(page, locator, hrefOverride) {
     await locator.scrollIntoViewIfNeeded({ timeout: 10000 });
     await locator.click({ force: true, timeout: 15000 });
   } catch (e) {
-    const url = resolveHref(page, href);
-    if (!url) throw e;
-    await page.goto(url, { waitUntil: 'domcontentloaded' });
+    try {
+      await locator.evaluate((el) => el.click());
+    } catch (e2) {
+      const url = resolveHref(page, href);
+      if (!url) throw e;
+      await page.goto(url, { waitUntil: 'domcontentloaded' });
+    }
   }
   await waitUntilReady(page);
 }
 
-test('Dellのページネーションテスト', async ({ page }) => {
-  const db = createPclistDb();
-  const popupWatcher = setInterval(async () => {
-    if (page.isClosed()) return;
-    await handleInitialPopups(page).catch(() => {});
-  }, 5000);
+function getCardDeckItems(page) {
+  return page.locator('.card-deck-item');
+}
+
+/** 一覧ページのページネーションと区別して構成カードの次へボタンを取得 */
+async function getCardDeckNextButton(page) {
+  if (await getCardDeckItems(page).count() === 0) return null;
+
+  const buttons = page.locator('button[aria-label="Next page"]');
+  const count = await buttons.count();
+  for (let i = 0; i < count; i++) {
+    const btn = buttons.nth(i);
+    const isListPagination = await btn
+      .evaluate((el) => Boolean(el.closest('#scr-pagination-content, #sr-dds-pagination')))
+      .catch(() => true);
+    if (isListPagination) continue;
+    if (await btn.isVisible().catch(() => false)) return btn;
+  }
+  return null;
+}
+
+async function getCardDeckSignature(page) {
+  const cards = getCardDeckItems(page);
+  const count = await cards.count();
+  const parts = [];
+  for (let i = 0; i < count; i++) {
+    parts.push(await cards.nth(i).innerText().catch(() => ''));
+  }
+  return parts.join('\n---\n');
+}
+
+async function getCardDeckItemInfo(card) {
+  let price = null;
+  let note = null;
+  const priceLoc = card.locator('.sale-price').first();
+  const noteLoc = card.locator('.card-specs .list-unstyled, .card-specs').first();
+
+  if (await priceLoc.count() > 0) {
+    price = (await priceLoc.textContent())?.replace(/,|円/g, '').trim() || null;
+  }
+  if (await noteLoc.count() > 0) {
+    note = await extractNoteText(noteLoc);
+  }
+  return { price, note };
+}
+
+async function goNextCardDeckPage(page) {
+  const nextBtn = await getCardDeckNextButton(page);
+  if (!nextBtn) return false;
+
+  await nextBtn.scrollIntoViewIfNeeded();
+  const ariaDisabled = await nextBtn.getAttribute('aria-disabled');
+  if (await nextBtn.isDisabled() || ariaDisabled === 'true') return false;
+
+  const signatureBefore = await getCardDeckSignature(page);
+  await handleInitialPopups(page);
+  await nextBtn.click({ force: true });
+  // ページリロードは起こらないが、DOM 差し替えの完了を少し待つ
+  await sleep(400);
+
+  const signatureAfter = await getCardDeckSignature(page);
+  if (signatureBefore === signatureAfter) {
+    console.log('構成カードの次ページへ進めませんでした。');
+    return false;
+  }
+  return true;
+}
+
+/**
+ * カスタマイズページ等の .card-deck-item をページングしながら収集する。
+ * @returns {Promise<boolean>} 構成カードを 1 件以上処理したら true
+ */
+async function scrapeCardDeckPages(page, db, baseProductInfo) {
+  if (await getCardDeckItems(page).count() === 0) return false;
+
+  const maxDeckPages = 50;
+  let deckPageNum = 1;
+  while (deckPageNum <= maxDeckPages) {
+    await handleInitialPopups(page);
+    await waitUntilReady(page);
+
+    const cards = getCardDeckItems(page);
+    const count = await cards.count();
+    console.log(`構成カード ${count} 件（デッキページ ${deckPageNum}）: ${page.url()}`);
+
+    const pageInfo = baseProductInfo ?? await getProductInfo(page);
+    const linux = await checkSearchTexts(page);
+
+    for (let i = 0; i < count; i++) {
+      const cardInfo = await getCardDeckItemInfo(cards.nth(i));
+      const productInfo = {
+        name: pageInfo?.name ?? null,
+        model: pageInfo?.model ?? null,
+        note: cardInfo.note ?? pageInfo?.note ?? null,
+        price: cardInfo.price ?? pageInfo?.price ?? null,
+        img: pageInfo?.img ?? null,
+      };
+      console.log(`  [card ${i + 1}]`, productInfo, linux);
+      saveProduct(db, page.url(), productInfo, linux);
+    }
+
+    if (!(await goNextCardDeckPage(page))) break;
+    deckPageNum++;
+  }
+
+  return true;
+}
+
+async function clickCustomizeButton(page) {
+  const btn = page
+    .locator('span.btn.btn-outline-primary, a.btn, button')
+    .filter({ hasText: '今すぐカスタマイズ' })
+    .first();
+  if (await btn.count() === 0) return false;
+
+  await handleInitialPopups(page);
+  await waitUntilReady(page);
+  await btn.scrollIntoViewIfNeeded();
+  try {
+    await btn.click({ force: true, timeout: 30_000 });
+  } catch (e) {
+    console.log('今すぐカスタマイズ クリック失敗、再試行:', e.message);
+    await btn.evaluate((el) => el.click());
+  }
+  await waitUntilReady(page);
+  await page
+    .locator('.card-deck-item, .ux-cell-text, .ux-cell-title, h1 .page-title, h1.cf-pg-title')
+    .first()
+    .waitFor({ state: 'attached', timeout: 30_000 })
+    .catch(() => {});
+  return true;
+}
+
+async function scrapeCustomizeView(page, db, baseProductInfo) {
+  await handleInitialPopups(page);
+  await waitUntilReady(page);
 
   try {
-  // 1. ターゲットページへ移動
-  await page.goto(targeturl, { waitUntil: 'domcontentloaded' });
-  // 2. ポップアップ処理を呼び出す（ここでクッキー同意やアンケートを自動処理）
-  // 3. 本来のスクレイピング処理（次へボタンを連打）
+    if (await scrapeCardDeckPages(page, db, baseProductInfo)) return;
+  } catch (e) {
+    console.log('構成カード収集エラー:', e.message);
+  }
+
+  try {
+    const productInfo = baseProductInfo ?? await getProductInfo(page);
+    const linux = await checkSearchTexts(page);
+    console.log(page.url(), productInfo, linux);
+    saveProduct(db, page.url(), productInfo, linux);
+  } catch (e) {
+    console.log('カスタマイズページ収集エラー:', e.message);
+    if (baseProductInfo) {
+      saveProduct(db, page.url(), baseProductInfo, { linuxtext: null, linuxprice: null });
+    } else {
+      throw e;
+    }
+  }
+}
+
+export async function getDellScraping(page, url, db, pctyp) {
+  db.setPctyp(pctyp);
+  console.log(`スクレイピング開始 [${pctyp}]: ${url}`);
+
+  await page.goto(url, { waitUntil: 'domcontentloaded' });
+  await handleInitialPopups(page);
   console.log('本来のスクレイピング処理を開始します。');
-  async function getItems(page){
+
+  async function getItems(page) {
     const items = getProductArticles(page);
     try {
       await items.first().waitFor({ state: 'visible', timeout: 30000 });
@@ -268,31 +510,49 @@ test('Dellのページネーションテスト', async ({ page }) => {
       return { items, count: 0 };
     }
   }
-  // ページループ
-  var productInfo = null;
-  var linux = null;
+
+  let productInfo = null;
+  let linux = null;
+  const visitedProducts = new Set();
+  const visitedScrapeUrls = new Set();
   while (true) {
-    // 商品リスト
-    var {items,count} = await getItems(page);
-    var currenturl = page.url();
-    
-    for (let i = 0; i < count; i++) {  
+    if (page.isClosed()) break;
+    let { items, count } = await getItems(page);
+    const currenturl = page.url();
+
+    for (let i = 0; i < count; i++) {
+      if (page.isClosed()) break;
       const custompage = getProductDetailLink(items.nth(i));
-      // 商品別ページ情報の取得
       if (await custompage.count() > 0) {
         const customHref = await custompage.getAttribute('href').catch(() => null);
+        const detailKey = resolveHref(page, customHref) ?? customHref;
+        if (detailKey && visitedProducts.has(detailKey)) {
+          console.log(`スキップ（既に処理済み）: ${detailKey}`);
+          continue;
+        }
         await handleInitialPopups(page);
         await clickLink(page, custompage, customHref);
         await handleInitialPopups(page);
-        // 詳細を取得する
-        // 基本構成がある場合
-        var basicOptions = page.locator('a.base-config-option');
-        var nowcustomize = page.locator(
+        await waitUntilReady(page);
+
+        if (!isProductDetailUrl(page.url())) {
+          console.log(`商品詳細へ遷移できませんでした (${i + 1}/${count}):`, page.url());
+          if (!urlsMatch(page.url(), currenturl)) {
+            await goBack(page, currenturl);
+          }
+          continue;
+        }
+        if (detailKey) visitedProducts.add(detailKey);
+
+        let basicOptions = page.locator('a.base-config-option');
+        let nowcustomize = page.locator(
           'span.btn.btn-outline-primary',
-           { hasText: '今すぐカスタマイズ' })
-        var basicurl = page.url();
+          { hasText: '今すぐカスタマイズ' },
+        );
+        let basicurl = page.url();
+
         if (await basicOptions.count() > 0 || await nowcustomize.count() > 0) {
-          var jMax = 0;
+          let jMax = 0;
           if (await basicOptions.count() > 0) {
             jMax = await basicOptions.count();
           }
@@ -300,28 +560,37 @@ test('Dellのページネーションテスト', async ({ page }) => {
             jMax = 1;
           }
           for (let j = 0; j < jMax; j++) {
-            if (await basicOptions.count() > 0 && 
+            if (await basicOptions.count() > 0 &&
               await basicOptions.nth(j).getAttribute('aria-current') != 'true') {
               await handleInitialPopups(page);
-              await waitUntilReady(page);
               basicurl = page.url();
-              await basicOptions.nth(j).click({ force: true });
-              await waitUntilReady(page);
+              await clickLink(page, basicOptions.nth(j));
             }
-            productInfo = await getProductInfo(page);              
-            // 今すぐカスタマイズがある場合
+            productInfo = await getProductInfo(page);
+            if (page.isClosed()) break;
+            nowcustomize = page.locator(
+              'span.btn.btn-outline-primary',
+              { hasText: '今すぐカスタマイズ' },
+            );
 
-            var customizeurl = null;
-            if (await nowcustomize.count() > 0) {
+            let customizeurl = null;
+            const scrapeUrl = normalizePageUrl(page.url());
+            if (scrapeUrl && visitedScrapeUrls.has(scrapeUrl)) {
+              console.log(`スキップ（このページは収集済み）: ${scrapeUrl}`);
+            } else if (await nowcustomize.count() > 0) {
               customizeurl = page.url();
-              await handleInitialPopups(page);
-              await waitUntilReady(page);
-              await nowcustomize.click({ force: true });
-              await waitUntilReady(page);
+              await clickCustomizeButton(page);
+              await scrapeCustomizeView(page, db, productInfo);
+              if (scrapeUrl) visitedScrapeUrls.add(scrapeUrl);
+            } else if (await getCardDeckItems(page).count() > 0) {
+              await scrapeCardDeckPages(page, db, productInfo);
+              if (scrapeUrl) visitedScrapeUrls.add(scrapeUrl);
+            } else {
+              linux = await checkSearchTexts(page);
+              console.log(page.url(), productInfo, linux);
+              saveProduct(db, page.url(), productInfo, linux);
+              if (scrapeUrl) visitedScrapeUrls.add(scrapeUrl);
             }
-            linux = await checkSearchTexts(page);
-            console.log(page.url(), productInfo, linux);
-            saveProduct(db, page.url(), productInfo, linux);
             if (customizeurl && page.url() != customizeurl) {
               await goBack(page, customizeurl);
             }
@@ -331,32 +600,66 @@ test('Dellのページネーションテスト', async ({ page }) => {
             basicOptions = page.locator('a.base-config-option');
           }
         } else {
-        // 単品の場合
           productInfo = await getProductInfo(page,
             'h1.cf-pg-title span',
             '.cf-model-title',
-            'div.cf-dell-price > div.cf-price','div.cf-hero-bts',
-            "img[data-testid='sharedPolarisHeroPdImage']"
-          );   
-          linux = await checkSearchTexts(page,'.ux-cell-title','.ux-cell-delta-price');
+            'div.cf-dell-price > div.cf-price', 'div.cf-hero-bts',
+            "img[data-testid='sharedPolarisHeroPdImage']",
+          );
+          linux = await checkSearchTexts(page, '.ux-cell-title', '.ux-cell-delta-price');
           console.log(page.url(), productInfo, linux);
           saveProduct(db, page.url(), productInfo, linux);
         }
-        await sleep(1000);
-        // 戻る
+        await sleep(300);
         await handleInitialPopups(page);
         await goBack(page, currenturl);
         await waitUntilReady(page);
         await handleInitialPopups(page);
-        ({items,count} = await getItems(page));  
+        if (!urlsMatch(page.url(), currenturl)) {
+          console.log('一覧へ戻れなかったため goto で復帰します:', currenturl);
+          await page.goto(currenturl, { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => {});
+          await waitUntilReady(page);
+        }
+        if (!isListPageUrl(page.url())) {
+          console.log('一覧ページに戻れていないため goto を再試行します:', currenturl);
+          await page.goto(currenturl, { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => {});
+          await waitUntilReady(page);
+        }
+        ({ items, count } = await getItems(page));
       }
     }
 
     if (!(await goNextListPage(page))) break;
   }
+
+  console.log(`スクレイピング完了 [${pctyp}]`);
+}
+
+let scrapeDb = null;
+
+test.afterEach(async () => {
+  if (!scrapeDb) return;
+  saveCollectedData(scrapeDb, 'テスト終了（未保存データあり）');
+  scrapeDb = null;
+});
+
+test('Dell Scraping', async ({ page }) => {
+  test.setTimeout(0);
+  scrapeDb = createPclistDb({ finalDbName: 'pclist.db' });
+  const db = scrapeDb;
+  const popupWatcher = setInterval(async () => {
+    if (page.isClosed()) return;
+    await handleInitialPopups(page).catch(() => {});
+  }, 30_000);
+
+  try {
+    await getDellScraping(page, NOTEBOOK_URL, db, 'notepc');
+    //await getDellScraping(page, DESKTOP_URL, db, 'pc');
     db.finalize();
+    scrapeDb = null;
   } catch (e) {
-    db.discard();
+    saveCollectedData(db, `エラー中断 (${e.message})`);
+    scrapeDb = null;
     throw e;
   } finally {
     clearInterval(popupWatcher);

@@ -1,4 +1,7 @@
 {
+  "git.autoRepositoryDetection": "subFolders",
+  "git.detectSubmodules": true,
+  "git.detectSubmodulesLimit": 10,
   "debug.javascript.terminalOptions": {
     "skipFiles": [
       "<node_internals>/**",

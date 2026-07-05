@@ -5,12 +5,14 @@ import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const FINAL_DB_NAME = 'pclist.db';
+const DEFAULT_FINAL_DB_NAME = 'pclist.db';
 
 const CREATE_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS products (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pctyp TEXT,
     url TEXT,
+    imgurl TEXT,
     name TEXT,
     model TEXT,
     note TEXT,
@@ -21,8 +23,8 @@ const CREATE_TABLE_SQL = `
 `;
 
 const INSERT_SQL = `
-  INSERT INTO products (url, name, model, note, price, linuxtext, linuxprice)
-  VALUES (@url, @name, @model, @note, @price, @linuxtext, @linuxprice)
+  INSERT INTO products (pctyp, url, imgurl, name, model, note, price, linuxtext, linuxprice)
+  VALUES (@pctyp, @url, @imgurl, @name, @model, @note, @price, @linuxtext, @linuxprice)
 `;
 
 function normalizePrice(value) {
@@ -36,14 +38,49 @@ function normalizeNote(note) {
   return String(note).trim() || null;
 }
 
+function normalizeImageUrl(value) {
+  if (value == null) return null;
+  const s = String(value).trim();
+  if (!s) return null;
+  if (s.startsWith('//')) return `https:${s}`;
+  return s;
+}
+
+function normalizeUrl(url) {
+  if (url == null) return null;
+  try {
+    const u = new URL(url);
+    u.hash = '';
+    return u.href;
+  } catch {
+    return String(url).trim() || null;
+  }
+}
+
+function productKey({ url, note, price, linuxtext, linuxprice }) {
+  return [
+    normalizeUrl(url),
+    normalizeNote(note),
+    normalizePrice(price),
+    linuxtext ?? null,
+    normalizePrice(linuxprice),
+  ].join('\0');
+}
+
 export class PclistDb {
   /**
-   * @param {string} [baseDir] - DB を置くディレクトリ（省略時はプロジェクトルート）
+   * @param {object} [options]
+   * @param {string} [options.baseDir] - DB を置くディレクトリ（省略時はプロジェクトルート）
+   * @param {string} [options.finalDbName] - 確定時のファイル名（省略時: pclist.db）
    */
-  constructor(baseDir = projectRoot) {
+  constructor(options = {}) {
+    const baseDir = options.baseDir ?? projectRoot;
+    const finalDbName = options.finalDbName ?? DEFAULT_FINAL_DB_NAME;
+
     this.baseDir = baseDir;
-    this.finalPath = path.join(baseDir, FINAL_DB_NAME);
+    this.finalPath = path.join(baseDir, finalDbName);
     this.tempPath = path.join(os.tmpdir(), `pclist-${process.pid}.db.tmp`);
+    this.pctyp = null;
 
     for (const file of [this.tempPath, `${this.tempPath}-wal`, `${this.tempPath}-shm`, `${this.tempPath}-journal`]) {
       if (fs.existsSync(file)) fs.unlinkSync(file);
@@ -54,18 +91,41 @@ export class PclistDb {
     this.db.exec(CREATE_TABLE_SQL);
     this.insertStmt = this.db.prepare(INSERT_SQL);
     this.closed = false;
+    this.seenKeys = new Set();
+    this.skippedDuplicates = 0;
   }
 
-  insert({ url, name, model, note, price, linuxtext, linuxprice }) {
-    this.insertStmt.run({
+  /** @param {'notepc' | 'pc'} pctyp */
+  setPctyp(pctyp) {
+    this.pctyp = pctyp;
+  }
+
+  insert({ pctyp, url, imgurl, name, model, note, price, linuxtext, linuxprice }) {
+    const row = {
+      pctyp: pctyp ?? this.pctyp ?? null,
       url: url ?? null,
+      imgurl: normalizeImageUrl(imgurl),
       name: name ?? null,
       model: model ?? null,
       note: normalizeNote(note),
       price: normalizePrice(price),
       linuxtext: linuxtext ?? null,
       linuxprice: normalizePrice(linuxprice),
-    });
+    };
+    const key = productKey(row);
+    if (this.seenKeys.has(key)) {
+      this.skippedDuplicates++;
+      return false;
+    }
+    this.seenKeys.add(key);
+    this.insertStmt.run(row);
+    return true;
+  }
+
+  count() {
+    if (this.closed) return this.seenKeys.size;
+    const row = this.db.prepare('SELECT COUNT(*) AS c FROM products').get();
+    return row.c;
   }
 
   close() {
@@ -75,7 +135,7 @@ export class PclistDb {
     }
   }
 
-  /** 正常終了時: テンポラリ DB を pclist.db にリネーム */
+  /** 正常終了時: テンポラリ DB を finalPath にコピー */
   finalize() {
     this.close();
     if (!fs.existsSync(this.tempPath)) {
@@ -87,6 +147,9 @@ export class PclistDb {
     fs.copyFileSync(this.tempPath, this.finalPath);
     this.removeTempFiles();
     console.log(`✓ データベースを保存しました: ${this.finalPath}`);
+    if (this.skippedDuplicates > 0) {
+      console.log(`  重複 ${this.skippedDuplicates} 件をスキップしました`);
+    }
   }
 
   removeTempFiles() {
@@ -103,6 +166,11 @@ export class PclistDb {
   }
 }
 
-export function createPclistDb(baseDir) {
-  return new PclistDb(baseDir);
+/**
+ * @param {object} [options]
+ * @param {string} [options.baseDir]
+ * @param {string} [options.finalDbName]
+ */
+export function createPclistDb(options) {
+  return new PclistDb(options);
 }

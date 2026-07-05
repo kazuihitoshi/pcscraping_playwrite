@@ -70,23 +70,23 @@ flowchart LR
 
   subgraph excluded [対象外]
     carousel["おすすめ製品<br/>カルーセル<br/>📄 ページングあり"]
-    cardDeck["構成カード一覧<br/>📄 ページングあり<br/>未実装"]
+    cardDeck["構成カード一覧<br/>📄 ページングあり"]
   end
 
   listPage -->|"オプションを見る"| detailPage
   detailPage -->|"基本構成あり"| customizePage
   detailPage -->|"基本構成なし"| singlePage
   listPage -.->|"除外"| carousel
-  customizePage -.->|"参考のみ"| cardDeck
+  customizePage -.->|"scrapeCardDeckPages"| cardDeck
 ```
 
-※ カスタマイズページ内の構成カード（`.card-deck-item`）にはページングが存在する場合がありますが、現行スクリプトでは巡回していません。
+※ カスタマイズページ内の構成カード（`.card-deck-item`）は `scrapeCardDeckPages` で全ページを巡回します。
 
 | ページ種別 | URL の例 | ページング | 備考 |
 |------------|----------|:----------:|------|
 | **一覧ページ（SCC）** | `/shop/scc/scr/laptops` | **あり** | 商品リスト全体のページ送り。現状 7 ページ・84 件程度 |
 | **商品詳細（バリアントスタック）** | `/shop/.../spd/...?ref=variantstack` | なし | 基本構成タブ（`a.base-config-option`）で構成切替 |
-| **カスタマイズページ** | 上記から「今すぐカスタマイズ」遷移後 | 条件付き | 構成カード一覧のページングは未巡回 |
+| **カスタマイズページ** | 上記から「今すぐカスタマイズ」遷移後 | 条件付き | `.card-deck-item` のページングを巡回 |
 | **単品詳細ページ** | `/shop/.../spd/...`（`cf-*` 系 UI） | なし | 基本構成タブがない商品 |
 | **おすすめ製品カルーセル** | 一覧ページ内 | あり | スクレイピング対象外 |
 
@@ -147,18 +147,19 @@ flowchart TB
 
 スクレイパーは `#sr-product-stacks article` のうち **「オプションを見る」リンクを持つカードのみ** を対象とし、カルーセル内 `article` は除外しています。
 
-#### 3. カスタマイズページ内（参考・未実装）
+#### 3. カスタマイズページ内（構成カードのページング）
 
-`scraping.md` に記載。カード型の構成一覧を複数ページに分けている場合があります。
+「今すぐカスタマイズ」遷移後、`.card-deck-item` が存在する場合に全ページを巡回します。
 
 | 要素 | セレクタ |
 |------|----------|
 | 構成カード一覧 | `.card-deck-item` |
-| 次ページ（構成一覧） | `button[aria-label="Next page"]` |
-| スペック | `.card-specs` |
-| 価格 | `.sale-price` |
+| カード内スペック | `.card-specs` / `.card-specs .list-unstyled` |
+| カード内価格 | `.sale-price` |
+| 次ページ | `button[aria-label="Next page"]`（一覧ページのページネーションが無い場合） |
+| 終端判定 | 次へボタンの `disabled` または `aria-disabled="true"` |
 
-現行の `scraping.spec.js` はこのページングをループせず、表示中の 1 画面から OS オプションを取得します。
+各カードごとにページ共通の商品名・モデル（`getProductInfo`）と、カード固有のスペック・価格を組み合わせて DB に保存します。OS オプション（`checkSearchTexts`）は同一画面共通の値を各カードに付与します。
 
 ---
 

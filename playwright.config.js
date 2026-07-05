@@ -3,7 +3,7 @@ import { getBrowserUse } from './playwright.browser.js';
 
 export default defineConfig({
   testDir: './scraping',
-  timeout: 3_600_000,
+  timeout: 7_200_000,
   workers: 1,
   use: {
     ...getBrowserUse(),
