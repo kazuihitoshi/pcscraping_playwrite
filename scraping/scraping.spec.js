@@ -654,7 +654,7 @@ test('Dell Scraping', async ({ page }) => {
 
   try {
     await getDellScraping(page, NOTEBOOK_URL, db, 'notepc');
-    //await getDellScraping(page, DESKTOP_URL, db, 'pc');
+    await getDellScraping(page, DESKTOP_URL, db, 'pc');
     db.finalize();
     scrapeDb = null;
   } catch (e) {
