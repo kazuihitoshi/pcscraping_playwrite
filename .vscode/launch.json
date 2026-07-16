@@ -191,7 +191,216 @@
 
       "console": "integratedTerminal"
 
+    },
+    /////////////////////////////////
+    {
+
+      "name": "docker Playwright: ヘッドレス実行",
+
+      "type": "node",
+
+      "request": "launch",
+
+     // "preLaunchTask": "Verify WSL drive (U:)",
+
+      "program": "/app/node_modules/@playwright/test/cli.js",
+
+      "args": [
+
+        "test",
+
+        "scraping/scraping.spec.js",
+
+        "--workers=1",
+
+        "--config",
+
+        "/app/playwright.headless.config.js"
+
+      ],
+
+      "cwd": "/app",
+
+      "console": "integratedTerminal"
+
+    },
+
+    {
+
+      "name": "docker Playwright: ブレークポイントでステップ実行",
+
+      "type": "node",
+
+      "request": "launch",
+
+     // "preLaunchTask": "Verify WSL drive (U:)",
+
+      "program": "/app/node_modules/@playwright/test/cli.js",
+
+      "args": [
+
+        "test",
+
+        "scraping/scraping.spec.js",
+
+        "--headed",
+
+        "--workers=1",
+
+        "--config",
+
+        "/app/playwright.config.js"
+
+      ],
+
+      "cwd": "/app",
+
+      "console": "integratedTerminal",
+
+      "autoAttachChildProcesses": true,
+
+      "skipFiles": [
+
+        "<node_internals>/**",
+
+        "**/node_modules/playwright/**",
+
+        "**/node_modules/playwright-core/**"
+
+      ],
+
+      "env": {
+
+        "DISPLAY": ":0",
+
+        "QT_X11_NO_MITSHM": "1",
+
+        "_X11_NO_MITSHM": "1",
+
+        "LIBGL_ALWAYS_INDIRECT": "1",
+
+        "PW_TEST_SOURCE_TRANSFORM": "/app/scripts/debug-transform.cjs",
+
+        "PW_TEST_SOURCE_TRANSFORM_SCOPE": "/app/scraping"
+
+      },
+
+      "resolveSourceMapLocations": [
+
+        "/app/**",
+
+        "${workspaceFolder}/**"
+
+      ]
+
+    },
+
+    {
+
+      "name": "docker Playwright: Inspectorでステップ実行",
+
+      "type": "node",
+
+      "request": "launch",
+
+      //"preLaunchTask": "Verify WSL drive (U:)",
+
+      "program": "/app/node_modules/@playwright/test/cli.js",
+
+      "args": [
+
+        "test",
+
+        "scraping/scraping.spec.js",
+
+        "--debug",
+
+        "--workers=1",
+
+        "--config",
+
+        "/app/playwright.config.js"
+
+      ],
+
+      "cwd": "/app",
+
+      "console": "integratedTerminal",
+
+      "env": {
+
+        "DISPLAY": ":0",
+
+        "QT_X11_NO_MITSHM": "1",
+
+        "_X11_NO_MITSHM": "1",
+
+        "LIBGL_ALWAYS_INDIRECT": "1"
+
+      }
+
+    },
+
+    {
+
+      "name": "docker Python: pagemake",
+
+      "type": "debugpy",
+
+      "request": "launch",
+
+      //"preLaunchTask": "Verify WSL drive (U:)",
+
+      "program": "/app/pagemake/pagemake.py",
+
+      "cwd": "/app/pagemake",
+
+      "console": "integratedTerminal",
+
+      "env": {
+
+        "PATH": "/app/pagemake;${env:PATH}"
+
+      }
+
+    },
+
+    {
+
+      "name": "docker Python: bloggerpost",
+
+      "type": "debugpy",
+
+      "request": "launch",
+
+      //"preLaunchTask": "Verify WSL drive (U:)",
+
+      "program": "/app/pagemake/bloggerpost.py",
+
+      "cwd": "/app/pagemake",
+
+      "console": "integratedTerminal"
+
+    },
+
+    {
+
+      "name": "docker Python: 現在のファイル",
+
+      "type": "debugpy",
+
+      "request": "launch",
+
+      //"preLaunchTask": "Verify WSL drive (U:)",
+
+      "program": "${file}",
+
+      "cwd": "${fileDirname}",
+
+      "console": "integratedTerminal"
+
     }
+
 
   ]
 

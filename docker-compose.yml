@@ -6,11 +6,23 @@ services:
     container_name: pcscraping-playwrite
     shm_size: 2gb
     init: true
+    # headed: WSL(WSLg) の X11 ソケットを共有（WSL 上で docker compose 実行前提）
+    # VcXsrv 等を使う場合は DISPLAY を host.docker.internal:0.0 に戻す
+    environment:
+      DISPLAY: ${DISPLAY:-:0}
+      WAYLAND_DISPLAY: ${WAYLAND_DISPLAY:-wayland-0}
+      XDG_RUNTIME_DIR: ${XDG_RUNTIME_DIR:-/mnt/wslg/runtime-dir}
+      QT_X11_NO_MITSHM: "1"
+      _X11_NO_MITSHM: "1"
+      LIBGL_ALWAYS_INDIRECT: "1"
     volumes:
       # 収集結果の pclist.db をホスト側に残す
       - .:/app
       # ホストの node_modules でコンテナ内の依存関係を上書きしない
       - node_modules:/app/node_modules
+      # WSLg / X11（WSL で xeyes が動く環境と同じ display）
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      - /mnt/wslg:/mnt/wslg
     working_dir: /app
     command:
       - npx

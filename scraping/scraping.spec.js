@@ -259,6 +259,22 @@ async function getNextPageButton(page) {
   ).first();
 }
 
+function getListPageNumberFromUrl(url) {
+  try {
+    const n = Number(new URL(url).searchParams.get('page') || '1');
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  } catch {
+    return 1;
+  }
+}
+
+function buildListPageUrl(url, pageNum) {
+  const u = new URL(url);
+  if (pageNum <= 1) u.searchParams.delete('page');
+  else u.searchParams.set('page', String(pageNum));
+  return u.href;
+}
+
 async function hasListPageChanged(page, { urlBefore, pageBefore, articleTextBefore }) {
   if (!urlsMatch(page.url(), urlBefore)) return true;
 
@@ -294,19 +310,52 @@ async function goNextListPage(page) {
   const pageInput = getListPagination(page).locator('input[aria-label="ページ"]');
   const pageBefore = (await pageInput.count()) > 0 ? await pageInput.inputValue() : null;
   const urlBefore = page.url();
+  const pageNumBefore = getListPageNumberFromUrl(urlBefore);
   const articleTextBefore = await page.locator('#sr-product-stacks article').first().textContent().catch(() => null);
 
-  await handleInitialPopups(page);
-  await waitUntilReady(page);
-  await nextpage.click({ force: true });
-  await waitUntilReady(page);
+  const maxAttempts = 8;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (page.isClosed()) return false;
 
-  for (let attempt = 0; attempt < 200; attempt++) {
-    if (await hasListPageChanged(page, { urlBefore, pageBefore, articleTextBefore })) {
-      return true;
+    await handleInitialPopups(page);
+    await waitUntilReady(page);
+
+    if (attempt >= 3) {
+      // クリックが効かない環境向け: ?page=N で直接遷移
+      const nextUrl = buildListPageUrl(urlBefore, pageNumBefore + 1);
+      console.log(`次ページを URL 遷移で試行: ${nextUrl}`);
+      await page.goto(nextUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => {});
+    } else {
+      const btn = await getNextPageButton(page);
+      if (await btn.count() === 0) {
+        console.log('次へボタンなし。一覧走査を終了します。');
+        return false;
+      }
+      const disabled = await btn.getAttribute('aria-disabled');
+      if (await btn.isDisabled() || disabled === 'true') {
+        console.log('最終ページです。一覧走査を終了します。');
+        return false;
+      }
+      await btn.scrollIntoViewIfNeeded().catch(() => {});
+      if (attempt === 1) {
+        await btn.click({ force: true });
+      } else {
+        await btn.evaluate((el) => el.click()).catch(async () => {
+          await btn.click({ force: true });
+        });
+      }
     }
-    console.log('次ページリトライします...');
-    await sleep(5000);
+
+    await waitUntilReady(page);
+
+    for (let wait = 0; wait < 10; wait++) {
+      if (await hasListPageChanged(page, { urlBefore, pageBefore, articleTextBefore })) {
+        return true;
+      }
+      await sleep(500);
+    }
+
+    console.log(`次ページリトライします... (${attempt}/${maxAttempts})`);
   }
 
   console.log('次ページへ進めなかったため一覧走査を終了します。');
