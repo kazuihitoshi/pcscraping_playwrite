@@ -1,0 +1,13 @@
+[Unit]
+Description=PC Scraping Playwright Task
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/docker/pcscraping_playwrite
+ExecStart=/bin/bash -c "docker compose up && if [ -d pagemake ]; then docker compose run --workdir /app/pagemake scraper python3 pagemake.py; fi"
+User=root
+
+[Install]
+WantedBy=multi-user.target

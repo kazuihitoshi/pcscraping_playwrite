@@ -17,7 +17,7 @@ WORKDIR /app
 
 COPY package.json package-lock.json ./
 RUN npm ci
-RUN npx playwright install --with-deps chromium
+RUN npx playwright install chrome
 
 COPY playwright.browser.js playwright.headless.config.js playwright.config.js ./
 COPY scraping ./scraping
