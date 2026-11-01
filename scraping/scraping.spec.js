@@ -183,27 +183,110 @@ export async function goBack(page, url) {
   }
 }
 
+function mergeSelectors(...parts) {
+  const seen = new Set();
+  for (const part of parts) {
+    if (!part) continue;
+    for (const sel of String(part).split(',')) {
+      const trimmed = sel.trim();
+      if (trimmed) seen.add(trimmed);
+    }
+  }
+  return [...seen].join(', ');
+}
+
+function osOptionSelectors() {
+  return mergeSelectors(
+    '.ux-cell-text',
+    '.ux-cell-title',
+    '.option-title',
+    '.option-grid-item .title',
+    '[class*="option-title"]',
+  );
+}
+
+async function expandOsSection(page) {
+  const headings = page
+    .locator('button, [role="button"], h2, h3, [class*="module"], [class*="accordion"]')
+    .filter({ hasText: /オペレーティング\s*システム/ });
+  const count = await headings.count().catch(() => 0);
+  for (let i = 0; i < Math.min(count, 6); i++) {
+    const el = headings.nth(i);
+    if (!(await el.isVisible().catch(() => false))) continue;
+    const expanded = await el.getAttribute('aria-expanded').catch(() => null);
+    if (expanded === 'true') continue;
+    await el.scrollIntoViewIfNeeded().catch(() => {});
+    await el.click({ force: true }).catch(() => {});
+    await sleep(400);
+  }
+}
+
+async function waitForOsOptions(page) {
+  await waitUntilReady(page);
+  await expandOsSection(page);
+  await page
+    .locator(osOptionSelectors())
+    .first()
+    .waitFor({ state: 'attached', timeout: 12_000 })
+    .catch(() => {});
+}
+
 export async function checkSearchTexts(scope, itemSelector, priceSelector, searchTexts) {
-  if (itemSelector === undefined) itemSelector = '.ux-cell-text';
-  if (priceSelector === undefined) priceSelector = '.ux-cell-delta-price';
+  // 旧カスタマイズ UI（.ux-cell-*）と、現行の構成画面（.option-title）の両方を見る
+  itemSelector = mergeSelectors(
+    itemSelector ?? '.ux-cell-text',
+    osOptionSelectors(),
+  );
+  if (priceSelector === undefined) {
+    priceSelector = mergeSelectors('.ux-cell-delta-price', '.price', '.option-price');
+  }
   if (searchTexts === undefined) searchTexts = osSearchTexts;
+
+  if (scope.waitForLoadState) {
+    await waitForOsOptions(scope);
+  }
 
   return scope.evaluate(
     ({ itemSelector, priceSelector, searchTexts }) => {
       const needles = searchTexts.map((t) => t.toLowerCase());
-      for (const itemEl of document.querySelectorAll(itemSelector)) {
-        const text = (itemEl.textContent ?? '').trim();
+      const normalizeDelta = (raw) => {
+        const text = (raw ?? '').trim();
+        if (!text || text === '選択済み') return '';
+        const negative = /^[\u2212\u2013\u2014-]/.test(text);
+        const digits = text.replace(/[^\d]/g, '');
+        if (!digits) return '';
+        return negative ? `-${digits}` : digits;
+      };
+      const rank = (text) => {
         const lower = text.toLowerCase();
+        if (lower.includes('ubuntu')) return 0;
+        if (lower.includes('linux')) return 1;
+        return 2;
+      };
+      const clean = (text) => (text ?? '').replace(/\s+/g, ' ').trim();
+      const isNoise = (el, text) => {
+        if (!text) return true;
+        if (el.closest('footer, nav, header')) return true;
+        if (text.length > 180) return true;
+        return false;
+      };
+
+      const matches = [];
+      for (const itemEl of document.querySelectorAll(itemSelector)) {
+        const text = clean(itemEl.textContent);
+        const lower = text.toLowerCase();
+        if (isNoise(itemEl, text)) continue;
         if (!needles.some((n) => lower.includes(n))) continue;
-        const container = itemEl.parentElement ?? itemEl;
+        const optionItem = itemEl.closest('.option-grid-item, .ux-cell, [class*="option-item"]');
+        const container = optionItem ?? itemEl.parentElement ?? itemEl;
         const priceEl = container.querySelector(priceSelector);
-        const rawPrice = (priceEl?.textContent ?? '').trim();
-        return {
+        matches.push({
           linuxtext: text,
-          linuxprice: rawPrice.replace(/[^\d-]/g, ''),
-        };
+          linuxprice: normalizeDelta(priceEl?.textContent ?? ''),
+        });
       }
-      return { linuxtext: null, linuxprice: null };
+      matches.sort((a, b) => rank(a.linuxtext) - rank(b.linuxtext) || a.linuxtext.length - b.linuxtext.length);
+      return matches[0] ?? { linuxtext: null, linuxprice: null };
     },
     { itemSelector, priceSelector, searchTexts }
   );
@@ -240,13 +323,15 @@ function resolveHref(page, href) {
 /** 一覧の商品カードのみ取得（おすすめ製品カルーセル内の article を除外） */
 function getProductArticles(page) {
   return page.locator('#sr-product-stacks article').filter({
-    has: page.locator('a.variant-customize-button, a:has-text("オプションを見る")'),
+    has: page.locator('a.variant-customize-button, a:has-text("オプションを見る"), a:has-text("モデルを見る")'),
   });
 }
 
 /** 商品詳細へ進むリンク（旧 UI / 新 UI 両対応） */
 function getProductDetailLink(article) {
-  return article.locator('a.variant-customize-button, a:has-text("オプションを見る")').first();
+  return article.locator(
+    'a.variant-customize-button, a:has-text("オプションを見る"), a:has-text("モデルを見る")',
+  ).first();
 }
 
 function getListPagination(page) {
@@ -453,7 +538,7 @@ async function goNextCardDeckPage(page) {
  * カスタマイズページ等の .card-deck-item をページングしながら収集する。
  * @returns {Promise<boolean>} 構成カードを 1 件以上処理したら true
  */
-async function scrapeCardDeckPages(page, db, baseProductInfo) {
+async function scrapeCardDeckPages(page, db, baseProductInfo, linuxOverride) {
   if (await getCardDeckItems(page).count() === 0) return false;
 
   const maxDeckPages = 50;
@@ -467,7 +552,7 @@ async function scrapeCardDeckPages(page, db, baseProductInfo) {
     console.log(`構成カード ${count} 件（デッキページ ${deckPageNum}）: ${page.url()}`);
 
     const pageInfo = baseProductInfo ?? await getProductInfo(page);
-    const linux = await checkSearchTexts(page);
+    const linux = linuxOverride ?? await checkSearchTexts(page);
 
     for (let i = 0; i < count; i++) {
       const cardInfo = await getCardDeckItemInfo(cards.nth(i));
@@ -489,11 +574,15 @@ async function scrapeCardDeckPages(page, db, baseProductInfo) {
   return true;
 }
 
-async function clickCustomizeButton(page) {
-  const btn = page
-    .locator('span.btn.btn-outline-primary, a.btn, button')
-    .filter({ hasText: '今すぐカスタマイズ' })
+function getCustomizeButton(page) {
+  return page
+    .locator('span.btn.btn-outline-primary, a.btn, button, a')
+    .filter({ hasText: /今すぐカスタマイズ|カスタマイズ\s*オーダー/ })
     .first();
+}
+
+async function clickCustomizeButton(page) {
+  const btn = getCustomizeButton(page);
   if (await btn.count() === 0) return false;
 
   await handleInitialPopups(page);
@@ -502,37 +591,39 @@ async function clickCustomizeButton(page) {
   try {
     await btn.click({ force: true, timeout: 30_000 });
   } catch (e) {
-    console.log('今すぐカスタマイズ クリック失敗、再試行:', e.message);
+    console.log('カスタマイズ クリック失敗、再試行:', e.message);
     await btn.evaluate((el) => el.click());
   }
   await waitUntilReady(page);
   await page
-    .locator('.card-deck-item, .ux-cell-text, .ux-cell-title, h1 .page-title, h1.cf-pg-title')
+    .locator('.card-deck-item, .ux-cell-text, .ux-cell-title, .option-title, h1 .page-title, h1.cf-pg-title')
     .first()
     .waitFor({ state: 'attached', timeout: 30_000 })
     .catch(() => {});
+  await waitForOsOptions(page);
   return true;
 }
 
-async function scrapeCustomizeView(page, db, baseProductInfo) {
+async function scrapeCustomizeView(page, db, baseProductInfo, linuxFallback) {
   await handleInitialPopups(page);
   await waitUntilReady(page);
+  let linux = await checkSearchTexts(page);
+  if (!linux?.linuxtext && linuxFallback?.linuxtext) linux = linuxFallback;
 
   try {
-    if (await scrapeCardDeckPages(page, db, baseProductInfo)) return;
+    if (await scrapeCardDeckPages(page, db, baseProductInfo, linux)) return;
   } catch (e) {
     console.log('構成カード収集エラー:', e.message);
   }
 
   try {
     const productInfo = baseProductInfo ?? await getProductInfo(page);
-    const linux = await checkSearchTexts(page);
     console.log(page.url(), productInfo, linux);
     saveProduct(db, page.url(), productInfo, linux);
   } catch (e) {
     console.log('カスタマイズページ収集エラー:', e.message);
     if (baseProductInfo) {
-      saveProduct(db, page.url(), baseProductInfo, { linuxtext: null, linuxprice: null });
+      saveProduct(db, page.url(), baseProductInfo, linux);
     } else {
       throw e;
     }
@@ -583,6 +674,7 @@ export async function getDellScraping(page, url, db, pctyp) {
         await clickLink(page, custompage, customHref);
         await handleInitialPopups(page);
         await waitUntilReady(page);
+        await waitForOsOptions(page);
 
         if (!isProductDetailUrl(page.url())) {
           console.log(`商品詳細へ遷移できませんでした (${i + 1}/${count}):`, page.url());
@@ -594,10 +686,7 @@ export async function getDellScraping(page, url, db, pctyp) {
         if (detailKey) visitedProducts.add(detailKey);
 
         let basicOptions = page.locator('a.base-config-option');
-        let nowcustomize = page.locator(
-          'span.btn.btn-outline-primary',
-          { hasText: '今すぐカスタマイズ' },
-        );
+        let nowcustomize = getCustomizeButton(page);
         let basicurl = page.url();
 
         if (await basicOptions.count() > 0 || await nowcustomize.count() > 0) {
@@ -617,19 +706,17 @@ export async function getDellScraping(page, url, db, pctyp) {
             }
             productInfo = await getProductInfo(page);
             if (page.isClosed()) break;
-            nowcustomize = page.locator(
-              'span.btn.btn-outline-primary',
-              { hasText: '今すぐカスタマイズ' },
-            );
+            nowcustomize = getCustomizeButton(page);
 
             let customizeurl = null;
             const scrapeUrl = normalizePageUrl(page.url());
             if (scrapeUrl && visitedScrapeUrls.has(scrapeUrl)) {
               console.log(`スキップ（このページは収集済み）: ${scrapeUrl}`);
             } else if (await nowcustomize.count() > 0) {
+              const linuxOnPage = await checkSearchTexts(page);
               customizeurl = page.url();
               await clickCustomizeButton(page);
-              await scrapeCustomizeView(page, db, productInfo);
+              await scrapeCustomizeView(page, db, productInfo, linuxOnPage);
               if (scrapeUrl) visitedScrapeUrls.add(scrapeUrl);
             } else if (await getCardDeckItems(page).count() > 0) {
               await scrapeCardDeckPages(page, db, productInfo);
@@ -648,6 +735,12 @@ export async function getDellScraping(page, url, db, pctyp) {
             }
             basicOptions = page.locator('a.base-config-option');
           }
+        } else if (await page.locator('.option-title').count() > 0) {
+          // 現行の構成画面。OS は .option-title、商品名は h1 .page-title
+          productInfo = await getProductInfo(page);
+          linux = await checkSearchTexts(page);
+          console.log(page.url(), productInfo, linux);
+          saveProduct(db, page.url(), productInfo, linux);
         } else {
           productInfo = await getProductInfo(page,
             'h1.cf-pg-title span',
